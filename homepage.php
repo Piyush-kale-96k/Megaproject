@@ -7,8 +7,9 @@ if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
 
-// Security: If not logged in, go back to login page
+// Check if the user is logged in, if not then redirect him to the login page
 if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
+    // CRITICAL FIX: Ensure the user is not redirected to a hardcoded path on logout
     header("Location: index.php");
     exit();
 }
@@ -17,6 +18,12 @@ if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
 $page = $_GET['page'] ?? 'home';
 $user_name = $_SESSION['name'] ?? 'User';
 $user_type = $_SESSION['user_type'] ?? 'student';
+
+// Define roles for specific permissions:
+// 1. Can manage reports (Technician & Teacher)
+$can_manage_reports = ($user_type === 'teacher' || $user_type === 'technician'); 
+// 2. Can manage labs structure (Only Teacher)
+$can_manage_labs = ($user_type === 'teacher');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -39,18 +46,31 @@ $user_type = $_SESSION['user_type'] ?? 'student';
             Fixit Lab
         </div>
         <div class="flex-grow p-4 space-y-2 overflow-y-auto">
-            <!-- Navigation Links -->
-            <a href="?page=home" class="block py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'home' ? 'bg-gray-700' : ''; ?>">Dashboard</a>
+            <!-- Common Links -->
+            
+            <a href="?page=home" class="block py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'home' ? 'bg-gray-700' : ''; ?>">Home</a>
             <a href="?page=profile" class="block py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'profile' ? 'bg-gray-700' : ''; ?>">Profile</a>
             <a href="?page=labs_view" class="block py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'labs_view' ? 'bg-gray-700' : ''; ?>">Lab Overview</a>
             <a href="?page=report" class="block py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'report' ? 'bg-gray-700' : ''; ?>">Report Fault</a>
             
-            <!-- Teacher Only Links -->
-            <?php if ($user_type === 'teacher'): ?>
+            <!-- Repair/Admin Links -->
+            <?php if ($can_manage_reports || $can_manage_labs): ?>
                 <div class="pt-4 mt-4 border-t border-gray-700">
-                    <p class="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Teacher Controls</p>
-                    <a href="?page=admin_dashboard" class="block mt-2 py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'admin_dashboard' ? 'bg-gray-700' : ''; ?>">Admin Dashboard</a>
-                    <a href="?page=manage_labs" class="block py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'manage_labs' ? 'bg-gray-700' : ''; ?>">Manage Labs</a>
+                    <p class="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Repair & Management</p>
+                    
+                    <?php if ($can_manage_reports): ?>
+                        <!-- Admin Dashboard is visible to both Teacher AND Technician -->
+                        <a href="?page=admin_dashboard" class="block mt-2 py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'admin_dashboard' ? 'bg-gray-700' : ''; ?>">Admin Dashboard</a>
+                        
+                        <!-- NEW LINK: Report History (Visible to both staff roles) -->
+                        <a href="?page=reports_history" title="View historical reports by date range" class="block py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'reports_history' ? 'bg-gray-700' : ''; ?>">Report History</a>
+                    <?php endif; ?>
+                    
+                    <?php if ($can_manage_labs): ?>
+                        <!-- Manage Labs is visible ONLY to Teacher -->
+                        <a href="?page=manage_labs" class="block py-2.5 px-4 rounded hover:bg-gray-700 <?php echo $page == 'manage_labs' ? 'bg-gray-700' : ''; ?>">Manage Labs</a>
+                    <?php endif; ?>
+
                 </div>
             <?php endif; ?>
         </div>
@@ -90,12 +110,12 @@ $user_type = $_SESSION['user_type'] ?? 'student';
             // Allowed pages list to prevent security issues (LFI)
             $allowed_pages = [
                 'home', 'profile', 'labs_view', 'report', 
-                'admin_dashboard', 'manage_labs', 
-                'about', 'contact', 'help', 'edit_lab'
+                'admin_dashboard', 'manage_labs', 'edit_lab',
+                'about', 'contact', 'help', 'pc_history', 'reports_history' 
             ];
 
             if (in_array($page, $allowed_pages)) {
-                $file = $page . '.php';
+                $file = $page . '.php'; 
                 if (file_exists($file)) {
                     include $file;
                 } else {

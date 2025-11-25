@@ -15,6 +15,8 @@ if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
 include 'db_connect.php';
 
 $labs_data = [];
+// Check if user is staff (Teacher or Technician)
+$is_staff = (isset($_SESSION['user_type']) && ($_SESSION['user_type'] === 'teacher' || $_SESSION['user_type'] === 'technician'));
 $is_teacher = (isset($_SESSION['user_type']) && $_SESSION['user_type'] === 'teacher');
 
 // Fetch all labs, their computers, and the latest unresolved report for each computer
@@ -120,7 +122,7 @@ if ($result) {
                                      data-date="<?php echo isset($computer['report_date']) ? date('M d, Y', strtotime($computer['report_date'])) : 'N/A'; ?>"
                                      data-computer-id="<?php echo htmlspecialchars($computer['computer_id'] ?? '0'); ?>"
                                      data-report-id="<?php echo htmlspecialchars($computer['report_id'] ?? '0'); ?>"
-                                     data-is-teacher="<?php echo $is_teacher ? '1' : '0'; ?>"
+                                     data-is-staff="<?php echo $is_staff ? '1' : '0'; ?>"
                                      data-report-current-status="<?php echo htmlspecialchars($computer['report_current_status'] ?? 'N/A'); ?>">
                                     <div class="font-bold text-lg">PC <?php echo htmlspecialchars($computer['pc_number']); ?></div>
                                     <div class="text-xs font-medium"><?php echo htmlspecialchars($computer['status']); ?></div>
@@ -169,15 +171,17 @@ if ($result) {
 
         pcBoxes.forEach(box => {
             box.addEventListener('click', () => {
-                const { labName, pcNumber, status, description, reporter, date, computerId, reportId, isTeacher, reportCurrentStatus } = box.dataset;
+                const { labName, pcNumber, status, description, reporter, date, computerId, reportId, isStaff, reportCurrentStatus } = box.dataset;
                 const isReported = status !== 'OK';
-                const isUserTeacher = isTeacher === '1';
+                const isUserStaff = isStaff === '1';
                 
                 modalTitle.textContent = `${labName} - PC ${pcNumber}`;
                 modalActions.innerHTML = ''; // Clear previous actions
 
                 // --- Build Modal Body Content ---
-                let bodyHtml;
+                let bodyHtml = '';
+                let manageFormHtml = '';
+                
                 if (!isReported) {
                     bodyHtml = `
                         <div class="p-4 bg-green-50 border border-green-200 rounded-lg text-center">
@@ -195,9 +199,9 @@ if ($result) {
                         </div>
                     `;
                     
-                    // --- Inject Teacher Management Form if reported and user is teacher ---
-                    if (isUserTeacher) {
-                        bodyHtml += `
+                    // --- Build Staff Management Form if reported and user is staff ---
+                    if (isUserStaff) {
+                        manageFormHtml = `
                             <div class="mt-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
                                 <form id="update-report-form" class="space-y-3">
                                     <input type="hidden" name="report_id" value="${reportId}">
@@ -217,16 +221,25 @@ if ($result) {
                     }
                 }
                 
-                modalBody.innerHTML = bodyHtml;
+                modalBody.innerHTML = bodyHtml + manageFormHtml;
 
-                // --- Build Modal Actions (Close Button) ---
-                modalActions.innerHTML = `<button id="close-modal-btn" class="px-4 py-2 bg-slate-700 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500">Close</button>`;
+                // --- Build Modal Actions (History and Close Button) ---
+                let actionsHtml = '';
+
+                // History Link (Visible to Staff on all PCs, or visible to all if reported)
+                if (isUserStaff || isReported) {
+                    actionsHtml += `<a href="?page=pc_history&computer_id=${computerId}" class="px-4 py-2 bg-slate-600 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-500 block mb-2">View Report History</a>`;
+                }
+
+                actionsHtml += `<button id="close-modal-btn" class="px-4 py-2 bg-slate-700 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500">Close</button>`;
                 
+                modalActions.innerHTML = actionsHtml;
+
                 // Re-attach close listener
                 document.getElementById('close-modal-btn').addEventListener('click', hideModal);
 
                 // --- Attach AJAX handler if form is present ---
-                if (isUserTeacher && isReported) {
+                if (isUserStaff && isReported) {
                     const form = document.getElementById('update-report-form');
                     const messageDiv = document.getElementById(`update-message-${reportId}`);
                     
@@ -238,7 +251,6 @@ if ($result) {
                         const formData = new FormData(form);
                         
                         try {
-                            // This fetch call requires update_report_status.php to exist!
                             const response = await fetch('update_report_status.php', {
                                 method: 'POST',
                                 body: formData

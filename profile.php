@@ -138,6 +138,7 @@ $initial = !empty($name) ? strtoupper(substr($name, 0, 1)) : '?';
                         <select id="roleInput" name="role" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 pl-3 pr-10 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                             <option <?php if ($role == 'Student') echo 'selected'; ?>>Student</option>
                             <option <?php if ($role == 'Teacher') echo 'selected'; ?>>Teacher</option>
+                            <option <?php if ($role == 'Technician') echo 'selected'; ?>>Technician</option>
                         </select>
                     </div>
                     <div>
@@ -187,4 +188,3 @@ $initial = !empty($name) ? strtoupper(substr($name, 0, 1)) : '?';
 <?php
 ob_end_flush(); // Send the output buffer and turn off buffering
 ?>
-

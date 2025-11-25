@@ -1,4 +1,4 @@
-
+<!-- FileName: index.php -->
 <?php
 session_start();
 ?>
@@ -10,7 +10,6 @@ session_start();
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Login & Signup</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
-   
     <link rel="stylesheet" href="style2.css" />
 </head>
 
@@ -40,6 +39,7 @@ session_start();
                     <option value="" disabled selected>Select User Type</option>
                     <option value="student">Student</option>
                     <option value="teacher">Teacher</option>
+                    <option value="technician">Technician</option> <!-- ADDED TECHNICIAN -->
                 </select>
                 <input type="text" name="name" placeholder="Name" required />
                 <input type="email" name="email" placeholder="Email" required />
@@ -67,10 +67,11 @@ session_start();
                     <option value="" disabled selected>Select User Type</option>
                     <option value="student">Student</option>
                     <option value="teacher">Teacher</option>
+                    <option value="technician">Technician</option> <!-- ADDED TECHNICIAN -->
                 </select>
                 <input type="email" name="email" placeholder="Email" required />
                 <input type="password" name="password" placeholder="Password" required />
-                <a href="forgetpage.php">Forgot your password?</a>
+                <a href="forgot_password.php">Forgot your password?</a>
                 <button type="submit">Sign In</button>
             </form>
         </div>
