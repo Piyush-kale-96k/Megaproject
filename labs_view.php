@@ -1,5 +1,7 @@
 <?php
 // labs_view.php (Content Fragment)
+// This page displays the grid view of all labs and computers.
+
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
@@ -22,16 +24,17 @@ $sql = "SELECT
             c.id AS computer_id, 
             c.pc_number, 
             c.status,
-            r.id AS report_id, -- CRITICAL: Fetch the latest report ID
+            r.id AS report_id, 
             r.description AS report_description,
             u.name AS reporter_name,
-            r.created_at AS report_date
+            r.created_at AS report_date,
+            r.status AS report_current_status
         FROM labs l 
         LEFT JOIN computers c ON l.id = c.lab_id 
         LEFT JOIN (
             -- This subquery finds the single latest unresolved report for each computer
             SELECT 
-                id, computer_id, description, user_id, created_at,
+                id, computer_id, description, user_id, created_at, status,
                 ROW_NUMBER() OVER(PARTITION BY computer_id ORDER BY created_at DESC) as rn
             FROM reports
             WHERE status != 'Resolved'
@@ -46,20 +49,21 @@ if ($result) {
         $lab_id = $row['lab_id'];
         if (!isset($labs_data[$lab_id])) {
             $labs_data[$lab_id] = [
-                'id' => $row['lab_id'], // Store ID here for the link
+                'id' => $row['lab_id'],
                 'name' => $row['lab_name'],
                 'computers' => []
             ];
         }
         if ($row['computer_id'] !== null) {
              $labs_data[$lab_id]['computers'][] = [
-                'computer_id' => $row['computer_id'], // Store computer ID
-                'report_id' => $row['report_id'],     // Store report ID
+                'computer_id' => $row['computer_id'],
+                'report_id' => $row['report_id'],
                 'pc_number' => $row['pc_number'],
                 'status' => $row['status'],
                 'report_description' => $row['report_description'],
                 'reporter_name' => $row['reporter_name'],
-                'report_date' => $row['report_date']
+                'report_date' => $row['report_date'],
+                'report_current_status' => $row['report_current_status']
             ];
         }
     }
@@ -116,7 +120,8 @@ if ($result) {
                                      data-date="<?php echo isset($computer['report_date']) ? date('M d, Y', strtotime($computer['report_date'])) : 'N/A'; ?>"
                                      data-computer-id="<?php echo htmlspecialchars($computer['computer_id'] ?? '0'); ?>"
                                      data-report-id="<?php echo htmlspecialchars($computer['report_id'] ?? '0'); ?>"
-                                     data-is-teacher="<?php echo $is_teacher ? '1' : '0'; ?>">
+                                     data-is-teacher="<?php echo $is_teacher ? '1' : '0'; ?>"
+                                     data-report-current-status="<?php echo htmlspecialchars($computer['report_current_status'] ?? 'N/A'); ?>">
                                     <div class="font-bold text-lg">PC <?php echo htmlspecialchars($computer['pc_number']); ?></div>
                                     <div class="text-xs font-medium"><?php echo htmlspecialchars($computer['status']); ?></div>
                                 </div>
@@ -151,7 +156,6 @@ if ($result) {
         const modalBody = document.getElementById('modal-body');
         const modalActions = document.getElementById('modal-actions');
         const pcBoxes = document.querySelectorAll('.pc-box');
-        const isTeacher = modal.dataset.isTeacher === '1'; // Get teacher status from a reference point
 
         const showModal = () => {
             modal.classList.remove('hidden');
@@ -165,20 +169,23 @@ if ($result) {
 
         pcBoxes.forEach(box => {
             box.addEventListener('click', () => {
-                const { labName, pcNumber, status, description, reporter, date, computerId, reportId, isTeacher } = box.dataset;
+                const { labName, pcNumber, status, description, reporter, date, computerId, reportId, isTeacher, reportCurrentStatus } = box.dataset;
                 const isReported = status !== 'OK';
+                const isUserTeacher = isTeacher === '1';
                 
                 modalTitle.textContent = `${labName} - PC ${pcNumber}`;
+                modalActions.innerHTML = ''; // Clear previous actions
 
                 // --- Build Modal Body Content ---
+                let bodyHtml;
                 if (!isReported) {
-                    modalBody.innerHTML = `
+                    bodyHtml = `
                         <div class="p-4 bg-green-50 border border-green-200 rounded-lg text-center">
                             <p class="font-medium text-green-800">This computer is working correctly.</p>
                         </div>
                     `;
                 } else {
-                    modalBody.innerHTML = `
+                    bodyHtml = `
                         <div class="text-sm">
                             <p><strong class="w-24 inline-block">Status:</strong> <span class="font-semibold text-gray-700">${status}</span></p>
                             <p><strong class="w-24 inline-block">Reported By:</strong> ${reporter}</p>
@@ -187,30 +194,77 @@ if ($result) {
                             <p class="text-gray-600 bg-gray-50 p-3 rounded-md">${description}</p>
                         </div>
                     `;
-                }
-                
-                // --- Build Modal Actions (Buttons) ---
-                let actionsHtml = `<button id="close-modal-btn" class="px-4 py-2 bg-slate-700 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500">Close</button>`;
-
-                if (isTeacher === '1' && isReported) {
-                    // Inject the Manage Report button for teachers
-                    // This links directly to the Admin Dashboard entry for this report
-                    const manageUrl = `?page=admin_dashboard&report_id=${reportId}&computer_id=${computerId}`;
                     
-                    actionsHtml = `
-                        <div class="flex flex-col space-y-2">
-                            <a href="${manageUrl}" class="inline-flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">
-                                Manage/Update Report
-                            </a>
-                            ${actionsHtml}
-                        </div>
-                    `;
+                    // --- Inject Teacher Management Form if reported and user is teacher ---
+                    if (isUserTeacher) {
+                        bodyHtml += `
+                            <div class="mt-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
+                                <form id="update-report-form" class="space-y-3">
+                                    <input type="hidden" name="report_id" value="${reportId}">
+                                    <label class="block text-sm font-medium text-gray-700">Update Report Status</label>
+                                    <select name="new_status" class="block w-full border-gray-300 rounded-md shadow-sm text-sm p-2 focus:ring-blue-500">
+                                        <option value="Reported" ${reportCurrentStatus === 'Reported' ? 'selected' : ''}>Reported (Needs Review)</option>
+                                        <option value="Reworking" ${reportCurrentStatus === 'Reworking' ? 'selected' : ''}>Reworking (In Progress)</option>
+                                        <option value="Resolved" ${reportCurrentStatus === 'Resolved' ? 'selected' : ''}>Resolved (Fixed)</option>
+                                    </select>
+                                    <button type="submit" class="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
+                                        Update Status
+                                    </button>
+                                    <div id="update-message-${reportId}" class="text-sm pt-1 hidden"></div>
+                                </form>
+                            </div>
+                        `;
+                    }
                 }
                 
-                modalActions.innerHTML = actionsHtml;
+                modalBody.innerHTML = bodyHtml;
+
+                // --- Build Modal Actions (Close Button) ---
+                modalActions.innerHTML = `<button id="close-modal-btn" class="px-4 py-2 bg-slate-700 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500">Close</button>`;
                 
-                // Re-attach close listener since actionsHtml was overwritten
+                // Re-attach close listener
                 document.getElementById('close-modal-btn').addEventListener('click', hideModal);
+
+                // --- Attach AJAX handler if form is present ---
+                if (isUserTeacher && isReported) {
+                    const form = document.getElementById('update-report-form');
+                    const messageDiv = document.getElementById(`update-message-${reportId}`);
+                    
+                    form.addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        messageDiv.textContent = 'Updating...';
+                        messageDiv.classList.remove('hidden', 'text-red-600', 'text-green-600');
+                        
+                        const formData = new FormData(form);
+                        
+                        try {
+                            // This fetch call requires update_report_status.php to exist!
+                            const response = await fetch('update_report_status.php', {
+                                method: 'POST',
+                                body: formData
+                            });
+
+                            const result = await response.json();
+                            
+                            if (result.success) {
+                                messageDiv.textContent = `Status updated to ${result.new_status}. Reloading page...`;
+                                messageDiv.classList.add('text-green-600', 'block');
+                                // Force a full page reload to refresh the grid color and status
+                                setTimeout(() => {
+                                    window.location.reload();
+                                }, 500);
+                                
+                            } else {
+                                messageDiv.textContent = `Error: ${result.message}`;
+                                messageDiv.classList.add('text-red-600', 'block');
+                            }
+                            
+                        } catch (error) {
+                            messageDiv.textContent = 'Network error. Could not connect to server.';
+                            messageDiv.classList.add('text-red-600', 'block');
+                        }
+                    });
+                }
 
                 showModal();
             });
