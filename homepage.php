@@ -117,6 +117,8 @@ $can_manage_labs = ($user_type === 'teacher');
             if (in_array($page, $allowed_pages)) {
                 $file = $page . '.php'; 
                 if (file_exists($file)) {
+                    // CRITICAL: Set this flag for fragments like contact.php to render correctly.
+                    $embedded_in_homepage = true;
                     include $file;
                 } else {
                     echo "<div class='bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative' role='alert'>

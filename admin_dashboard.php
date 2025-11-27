@@ -1,25 +1,42 @@
 <?php
 // admin_dashboard.php
 
-// This must be at the very top, before any other code
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
 
 // Ensure the user is logged in and is a teacher OR technician.
+$user_id = $_SESSION["user_id"] ?? 0;
 $user_type = $_SESSION["user_type"] ?? '';
 if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || ($user_type !== 'teacher' && $user_type !== 'technician')) {
     header("location: homepage.php?page=home");
     exit;
 }
 
-include 'db_connect.php'; // Your database connection
+include 'db_connect.php'; 
+
+$message = "";
+$success_message = '';
 
 // --- Handle Status Update ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
     $report_id = $_POST['report_id'];
     $computer_id = $_POST['computer_id'];
     $new_status = $_POST['new_status'];
+    
+    // Authorization Check: Ensure the user manages this lab before updating
+    // This query verifies that the computer belongs to a lab managed by the current user.
+    $auth_stmt = $conn->prepare("SELECT l.id FROM labs l JOIN computers c ON l.id = c.lab_id WHERE c.id = ? AND l.manager_id = ?");
+    $auth_stmt->bind_param("ii", $computer_id, $user_id);
+    $auth_stmt->execute();
+    if ($auth_stmt->get_result()->num_rows == 0) {
+        $_SESSION['success_message'] = "Error: You are not authorized to update reports for this lab.";
+        $auth_stmt->close();
+        header("Location: homepage.php?page=admin_dashboard");
+        exit;
+    }
+    $auth_stmt->close();
+
 
     // Update the report status
     $stmt = $conn->prepare("UPDATE reports SET status = ? WHERE id = ?");
@@ -28,7 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
     $stmt->close();
 
     // Determine the new status for the computer
-    $computer_status = 'Reported'; // Default
+    $computer_status = 'Reported'; 
     if ($new_status === 'Resolved') {
         $computer_status = 'OK';
     } elseif ($new_status === 'Reworking') {
@@ -41,21 +58,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
     $stmt_computer->execute();
     $stmt_computer->close();
 
-    // Set a success message and redirect
     $_SESSION['success_message'] = "Report status has been updated successfully!";
     header("Location: homepage.php?page=admin_dashboard");
     exit;
 }
 
 // Check for a success message from the session
-$success_message = '';
 if (isset($_SESSION['success_message'])) {
     $success_message = $_SESSION['success_message'];
-    unset($_SESSION['success_message']); // Clear the message after displaying it
+    unset($_SESSION['success_message']); 
 }
 
 $reports = [];
-// Query to get all reports
+// --- CRITICAL QUERY FIX: Filter by manager_id ---
 $sql = "SELECT 
             r.id AS report_id,
             r.status AS report_status,
@@ -70,19 +85,24 @@ $sql = "SELECT
         JOIN users u ON r.user_id = u.id
         JOIN computers c ON r.computer_id = c.id
         JOIN labs l ON c.lab_id = l.id
+        WHERE l.manager_id = ? 
         ORDER BY FIELD(r.status, 'Reported', 'Reworking', 'Resolved'), r.created_at DESC";
 
-$result = mysqli_query($conn, $sql);
+$stmt_reports = $conn->prepare($sql);
+$stmt_reports->bind_param("i", $user_id);
+$stmt_reports->execute();
+$result = $stmt_reports->get_result();
 if ($result) {
     $reports = mysqli_fetch_all($result, MYSQLI_ASSOC);
 }
+$stmt_reports->close();
 
 ?>
 
 <div class="container mx-auto p-4 sm:p-6 lg:p-8">
     <header class="mb-8">
         <h1 class="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
-        <p class="text-gray-600 mt-1">Manage all submitted fault reports.</p>
+        <p class="text-gray-600 mt-1">Manage all submitted fault reports for your assigned labs.</p>
     </header>
 
     <!-- Success Message Display -->
@@ -107,7 +127,7 @@ if ($result) {
                 <tbody class="bg-white divide-y divide-gray-100">
                     <?php if (empty($reports)): ?>
                         <tr>
-                            <td colspan="5" class="text-center py-8 text-gray-500">No reports found.</td>
+                            <td colspan="5" class="text-center py-8 text-gray-500">No reports found for your assigned labs.</td>
                         </tr>
                     <?php else: ?>
                         <?php foreach ($reports as $report): ?>

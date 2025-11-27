@@ -1,12 +1,9 @@
 <?php
 // labs_view.php (Content Fragment)
-// This page displays the grid view of all labs and computers.
-
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
 
-// Security check: ensure user is logged in
 if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
     echo "<script>window.location.href='index.php';</script>";
     exit;
@@ -15,14 +12,17 @@ if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
 include 'db_connect.php';
 
 $labs_data = [];
-// Check if user is staff (Teacher or Technician)
-$is_staff = (isset($_SESSION['user_type']) && ($_SESSION['user_type'] === 'teacher' || $_SESSION['user_type'] === 'technician'));
-$is_teacher = (isset($_SESSION['user_type']) && $_SESSION['user_type'] === 'teacher');
+$user_id = $_SESSION['user_id'];
+$user_type = $_SESSION['user_type'] ?? 'student';
+$is_teacher = ($user_type === 'teacher');
+$is_staff = $is_teacher || ($user_type === 'technician');
 
-// Fetch all labs, their computers, and the latest unresolved report for each computer
+// Fetch all labs, their computers, manager info, and the latest unresolved report
 $sql = "SELECT 
             l.id AS lab_id, 
             l.name AS lab_name, 
+            l.manager_id,
+            m.name AS manager_name,
             c.id AS computer_id, 
             c.pc_number, 
             c.status,
@@ -33,15 +33,16 @@ $sql = "SELECT
             r.status AS report_current_status
         FROM labs l 
         LEFT JOIN computers c ON l.id = c.lab_id 
+        LEFT JOIN users m ON l.manager_id = m.id -- Manager's info
         LEFT JOIN (
-            -- This subquery finds the single latest unresolved report for each computer
+            -- Subquery for the single latest unresolved report
             SELECT 
                 id, computer_id, description, user_id, created_at, status,
                 ROW_NUMBER() OVER(PARTITION BY computer_id ORDER BY created_at DESC) as rn
             FROM reports
             WHERE status != 'Resolved'
         ) r ON c.id = r.computer_id AND r.rn = 1
-        LEFT JOIN users u ON r.user_id = u.id
+        LEFT JOIN users u ON r.user_id = u.id -- Reporter's info
         ORDER BY l.name, c.pc_number ASC";
 
 $result = mysqli_query($conn, $sql);
@@ -53,6 +54,8 @@ if ($result) {
             $labs_data[$lab_id] = [
                 'id' => $row['lab_id'],
                 'name' => $row['lab_name'],
+                'manager_name' => $row['manager_name'] ?? 'Unassigned', 
+                'manager_id' => $row['manager_id'] ?? 0,
                 'computers' => []
             ];
         }
@@ -85,13 +88,21 @@ if ($result) {
     <?php else: ?>
         <div class="space-y-8">
             <?php foreach ($labs_data as $lab): ?>
-                <div class="bg-white rounded-lg shadow-sm p-6">
-                    <!-- Lab Header (Name + Edit Button for Teachers) -->
+                <?php
+                    // Determine if the current staff user manages this lab
+                    $user_manages_lab = ($is_staff && $lab['manager_id'] == $user_id);
+                ?>
+                <div class="bg-white rounded-xl shadow-xl border border-gray-100 p-6">
+                    <!-- Lab Header (Name + Manager + Edit Button) -->
                     <div class="flex justify-between items-center mb-4 border-b pb-2">
-                        <h2 class="text-xl font-bold text-gray-800"><?php echo htmlspecialchars($lab['name']); ?></h2>
-                        <?php if ($is_teacher): ?>
+                        <div>
+                            <h2 class="text-xl font-bold text-gray-800"><?php echo htmlspecialchars($lab['name']); ?></h2>
+                            <p class="text-sm text-gray-500">Manager: 
+                                <span class="font-medium text-slate-700"><?php echo htmlspecialchars($lab['manager_name']); ?></span>
+                            </p>
+                        </div>
+                        <?php if ($is_teacher): // Only Teachers can edit lab structure ?>
                             <a href="?page=edit_lab&id=<?php echo $lab['id']; ?>" class="inline-flex items-center px-3 py-1 border border-transparent text-sm leading-4 font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition">
-                                <svg class="w-4 h-4 mr-1 -ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                                 Edit Lab
                             </a>
                         <?php endif; ?>
@@ -111,8 +122,10 @@ if ($result) {
                                     } elseif ($computer['status'] === 'Reworking') {
                                         $status_color = 'bg-yellow-100 text-yellow-800 border-yellow-300';
                                     }
+                                    
+                                    // Pass manager status to JS for modal button logic
+                                    $can_update_status = $user_manages_lab ? '1' : '0';
                                 ?>
-                                <!-- Added pc-box class and data attributes for the modal -->
                                 <div class="text-center p-3 rounded-lg border <?php echo $status_color; ?> cursor-pointer hover:shadow-md transition-shadow pc-box"
                                      data-lab-name="<?php echo htmlspecialchars($lab['name']); ?>"
                                      data-pc-number="<?php echo htmlspecialchars($computer['pc_number']); ?>"
@@ -123,6 +136,7 @@ if ($result) {
                                      data-computer-id="<?php echo htmlspecialchars($computer['computer_id'] ?? '0'); ?>"
                                      data-report-id="<?php echo htmlspecialchars($computer['report_id'] ?? '0'); ?>"
                                      data-is-staff="<?php echo $is_staff ? '1' : '0'; ?>"
+                                     data-can-update="<?php echo $can_update_status; ?>"
                                      data-report-current-status="<?php echo htmlspecialchars($computer['report_current_status'] ?? 'N/A'); ?>">
                                     <div class="font-bold text-lg">PC <?php echo htmlspecialchars($computer['pc_number']); ?></div>
                                     <div class="text-xs font-medium"><?php echo htmlspecialchars($computer['status']); ?></div>
@@ -158,7 +172,7 @@ if ($result) {
         const modalBody = document.getElementById('modal-body');
         const modalActions = document.getElementById('modal-actions');
         const pcBoxes = document.querySelectorAll('.pc-box');
-
+        
         const showModal = () => {
             modal.classList.remove('hidden');
             modal.classList.add('flex');
@@ -171,12 +185,18 @@ if ($result) {
 
         pcBoxes.forEach(box => {
             box.addEventListener('click', () => {
-                const { labName, pcNumber, status, description, reporter, date, computerId, reportId, isStaff, reportCurrentStatus } = box.dataset;
-                const isReported = status !== 'OK';
-                const isUserStaff = isStaff === '1';
+                const { 
+                    labName, pcNumber, status, description, reporter, date, 
+                    computerId, reportId, reportCurrentStatus, canUpdate, isStaff 
+                } = box.dataset;
                 
+                const isReported = status !== 'OK';
+                const canUserUpdateStatus = canUpdate === '1'; 
+                const isUserStaff = isStaff === '1';
+
                 modalTitle.textContent = `${labName} - PC ${pcNumber}`;
-                modalActions.innerHTML = ''; // Clear previous actions
+                modalActions.innerHTML = ''; 
+                modalBody.innerHTML = '';
 
                 // --- Build Modal Body Content ---
                 let bodyHtml = '';
@@ -188,10 +208,31 @@ if ($result) {
                             <p class="font-medium text-green-800">This computer is working correctly.</p>
                         </div>
                     `;
+                    
+                    // NEW: Add description box for staff to add notes even if status is OK
+                    if (isUserStaff) {
+                        manageFormHtml = `
+                            <div class="mt-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
+                                <form id="add-note-form" class="space-y-3">
+                                    <input type="hidden" name="computer_id" value="${computerId}">
+                                    <input type="hidden" name="new_status" value="OK">
+                                    <input type="hidden" name="is_internal_note" value="1">
+                                    <label class="block text-sm font-medium text-gray-700">Add Internal Note (for Maintenance Log)</label>
+                                    <textarea name="note_description" rows="3" class="block w-full border-gray-300 rounded-md shadow-sm text-sm p-2" placeholder="e.g., Checked wiring, needs RAM upgrade next month..." required></textarea>
+                                    <button type="submit" class="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-slate-700 hover:bg-slate-800">
+                                        Save Note
+                                    </button>
+                                    <div id="add-note-message" class="text-sm pt-1 hidden"></div>
+                                </form>
+                            </div>
+                        `;
+                    }
+
+
                 } else {
                     bodyHtml = `
                         <div class="text-sm">
-                            <p><strong class="w-24 inline-block">Status:</strong> <span class="font-semibold text-gray-700">${status}</span></p>
+                            <p><strong class="w-24 inline-block">Status:</strong> <span class="font-semibold text-red-700">${status}</span></p>
                             <p><strong class="w-24 inline-block">Reported By:</strong> ${reporter}</p>
                             <p><strong class="w-24 inline-block">Report Date:</strong> ${date}</p>
                             <p class="mt-2 pt-2 border-t"><strong class="block mb-1">Description:</strong></p>
@@ -199,8 +240,8 @@ if ($result) {
                         </div>
                     `;
                     
-                    // --- Build Staff Management Form if reported and user is staff ---
-                    if (isUserStaff) {
+                    // --- Build Staff Management Form if reported and user can update ---
+                    if (canUserUpdateStatus) {
                         manageFormHtml = `
                             <div class="mt-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
                                 <form id="update-report-form" class="space-y-3">
@@ -211,11 +252,22 @@ if ($result) {
                                         <option value="Reworking" ${reportCurrentStatus === 'Reworking' ? 'selected' : ''}>Reworking (In Progress)</option>
                                         <option value="Resolved" ${reportCurrentStatus === 'Resolved' ? 'selected' : ''}>Resolved (Fixed)</option>
                                     </select>
+                                    
+                                    <label class="block text-sm font-medium text-gray-700">Add Resolution Note (Optional)</label>
+                                    <textarea name="note_description" rows="3" class="block w-full border-gray-300 rounded-md shadow-sm text-sm p-2" placeholder="e.g., Replaced hard drive, installed Windows updates..."></textarea>
+
                                     <button type="submit" class="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
                                         Update Status
                                     </button>
                                     <div id="update-message-${reportId}" class="text-sm pt-1 hidden"></div>
                                 </form>
+                            </div>
+                        `;
+                    } else if (isUserStaff) {
+                        // Staff can see the report but cannot update it (not assigned manager)
+                        manageFormHtml = `
+                            <div class="mt-4 p-3 border border-yellow-300 rounded-lg bg-yellow-50 text-center text-sm text-yellow-800 font-medium">
+                                You are not the manager assigned to this lab, thus you cannot update its status here.
                             </div>
                         `;
                     }
@@ -226,8 +278,8 @@ if ($result) {
                 // --- Build Modal Actions (History and Close Button) ---
                 let actionsHtml = '';
 
-                // History Link (Visible to Staff on all PCs, or visible to all if reported)
-                if (isUserStaff || isReported) {
+                // History Link (Visible to Staff)
+                if (isUserStaff) {
                     actionsHtml += `<a href="?page=pc_history&computer_id=${computerId}" class="px-4 py-2 bg-slate-600 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-500 block mb-2">View Report History</a>`;
                 }
 
@@ -238,55 +290,116 @@ if ($result) {
                 // Re-attach close listener
                 document.getElementById('close-modal-btn').addEventListener('click', hideModal);
 
-                // --- Attach AJAX handler if form is present ---
-                if (isUserStaff && isReported) {
+                // --- Attach AJAX handler for status update (if form is present) ---
+                if (isReported && canUserUpdateStatus) {
                     const form = document.getElementById('update-report-form');
                     const messageDiv = document.getElementById(`update-message-${reportId}`);
                     
-                    form.addEventListener('submit', async (e) => {
-                        e.preventDefault();
-                        messageDiv.textContent = 'Updating...';
-                        messageDiv.classList.remove('hidden', 'text-red-600', 'text-green-600');
-                        
-                        const formData = new FormData(form);
-                        
-                        try {
-                            const response = await fetch('update_report_status.php', {
-                                method: 'POST',
-                                body: formData
-                            });
-
-                            const result = await response.json();
-                            
-                            if (result.success) {
-                                messageDiv.textContent = `Status updated to ${result.new_status}. Reloading page...`;
-                                messageDiv.classList.add('text-green-600', 'block');
-                                // Force a full page reload to refresh the grid color and status
-                                setTimeout(() => {
-                                    window.location.reload();
-                                }, 500);
-                                
-                            } else {
-                                messageDiv.textContent = `Error: ${result.message}`;
-                                messageDiv.classList.add('text-red-600', 'block');
-                            }
-                            
-                        } catch (error) {
-                            messageDiv.textContent = 'Network error. Could not connect to server.';
-                            messageDiv.classList.add('text-red-600', 'block');
-                        }
-                    });
+                    form.addEventListener('submit', (e) => handleReportUpdate(e, form, messageDiv));
                 }
+                
+                // --- Attach AJAX handler for adding internal notes (if form is present and status is OK) ---
+                if (!isReported && isUserStaff) {
+                    const form = document.getElementById('add-note-form');
+                    const messageDiv = document.getElementById('add-note-message');
+                    
+                    form.addEventListener('submit', (e) => handleNoteSubmission(e, form, messageDiv));
+                }
+
 
                 showModal();
             });
         });
         
-        // Listeners for closing modal (outside click and button)
+        // Listeners for closing modal (outside click)
         modal.addEventListener('click', (event) => {
             if (event.target === modal) {
                 hideModal();
             }
         });
+        
+        // Global handler for status update (used for reported PCs)
+        async function handleReportUpdate(e, form, messageDiv) {
+             e.preventDefault();
+            messageDiv.textContent = 'Updating...';
+            messageDiv.classList.remove('hidden', 'text-red-600', 'text-green-600');
+            
+            const formData = new FormData(form);
+            
+            try {
+                // FIXED: Use ./ to force relative path lookup from current directory
+                const response = await fetch('./update_report_status.php', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                // Check if response is actually JSON
+                const text = await response.text();
+                try {
+                    const result = JSON.parse(text);
+                    if (result.success) {
+                        messageDiv.textContent = `Status updated to ${result.new_status}. Reloading page...`;
+                        messageDiv.classList.add('text-green-600', 'block');
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 500);
+                    } else {
+                        messageDiv.textContent = `Error: ${result.message}`;
+                        messageDiv.classList.add('text-red-600', 'block');
+                    }
+                } catch (e) {
+                    console.error("Server Error:", text);
+                    messageDiv.textContent = `Server Error: Invalid response format. Check console.`;
+                    messageDiv.classList.add('text-red-600', 'block');
+                }
+                
+            } catch (error) {
+                console.error("Network Error:", error);
+                messageDiv.textContent = 'Network error. Could not connect to server.';
+                messageDiv.classList.add('text-red-600', 'block');
+            }
+        }
+        
+        // Global handler for internal note submission (used for OK PCs)
+        async function handleNoteSubmission(e, form, messageDiv) {
+             e.preventDefault();
+            messageDiv.textContent = 'Saving note...';
+            messageDiv.classList.remove('hidden', 'text-red-600', 'text-green-600');
+
+            const formData = new FormData(form);
+
+            // Re-route internal note submissions to the same endpoint
+            try {
+                // FIXED: Use ./ to force relative path lookup from current directory
+                const response = await fetch('./update_report_status.php', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const text = await response.text();
+                try {
+                    const result = JSON.parse(text);
+                    if (result.success) {
+                        messageDiv.textContent = `Note saved successfully! Reloading page...`;
+                        messageDiv.classList.add('text-green-600', 'block');
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 500);
+                    } else {
+                        messageDiv.textContent = `Error: ${result.message}`;
+                        messageDiv.classList.add('text-red-600', 'block');
+                    }
+                } catch (e) {
+                    console.error("Server Error:", text);
+                    messageDiv.textContent = `Server Error: Invalid response format. Check console.`;
+                    messageDiv.classList.add('text-red-600', 'block');
+                }
+                
+            } catch (error) {
+                console.error("Network Error:", error);
+                messageDiv.textContent = 'Network error. Could not connect to server.';
+                messageDiv.classList.add('text-red-600', 'block');
+            }
+        }
     });
 </script>

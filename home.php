@@ -1,7 +1,5 @@
 <?php
 // home.php (Content Fragment)
-// NOTE: This file is included inside homepage.php. It does not need <html> tags.
-
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
@@ -15,10 +13,12 @@ if (!isset($_SESSION['user_id'])) {
 
 $user_id = $_SESSION['user_id'];
 $user_type = $_SESSION['user_type'] ?? 'student';
+$is_staff = ($user_type === 'teacher' || $user_type === 'technician');
+
 
 // --- FETCH LIVE DATA FROM DATABASE ---
 
-// 1. Calculate PC Status Counts
+// 1. Calculate PC Status Counts (Global Count)
 $okPcsCount = 0;
 $reworkingPcsCount = 0;
 $reportedPcsCount = 0;
@@ -37,7 +37,7 @@ if ($status_result) {
     }
 }
 
-// 2. Fetch reports based on user type
+// 2. Fetch reports based on user type and assignment
 $userReports = [];
 $reports_query_params = [];
 $reports_query_types = "";
@@ -47,11 +47,13 @@ if ($user_type === 'student') {
     $report_title = "My Submitted Reports";
     $reports_query = "
         SELECT 
+            r.category,
             c.pc_number, 
             l.name AS lab_name, 
             r.description, 
             r.created_at, 
-            r.status
+            r.status,
+            '' AS reporter_name
         FROM reports r
         JOIN computers c ON r.computer_id = c.id
         JOIN labs l ON c.lab_id = l.id
@@ -61,10 +63,12 @@ if ($user_type === 'student') {
     $reports_query_types = "i";
 
 } else {
-    // Teachers/Technicians see all reports that are NOT resolved
-    $report_title = "All Pending Reports";
+    // Teachers/Technicians see pending reports ONLY from their assigned labs
+    $report_title = "Pending Reports for My Assigned Labs";
+    // CRITICAL: Filter by l.manager_id = ? 
     $reports_query = "
         SELECT 
+            r.category,
             c.pc_number, 
             l.name AS lab_name, 
             r.description, 
@@ -75,8 +79,10 @@ if ($user_type === 'student') {
         JOIN computers c ON r.computer_id = c.id
         JOIN labs l ON c.lab_id = l.id
         JOIN users u ON r.user_id = u.id
-        WHERE r.status != 'Resolved'
+        WHERE l.manager_id = ? AND r.status != 'Resolved'
         ORDER BY FIELD(r.status, 'Reported', 'Reworking'), r.created_at DESC";
+    $reports_query_params[] = $user_id;
+    $reports_query_types = "i";
 }
 
 // Execute the final report query
@@ -96,7 +102,7 @@ $stmt->close();
 
 <div class="container mx-auto p-4 sm:p-6 lg:p-8">
     
-    <!-- Status Summary Boxes (Kept the same) -->
+    <!-- Status Summary Boxes -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
         
         <div class="bg-white border border-green-200 rounded-xl shadow-md p-6 flex items-center">
@@ -130,13 +136,13 @@ $stmt->close();
         </div>
     </div>
 
-    <!-- Reports Section: Replaced Table with Card List -->
+    <!-- Reports Section: Card List -->
     <div class="bg-white rounded-xl shadow-xl border border-gray-100 p-6">
         <h2 class="text-xl font-bold text-gray-900 mb-4 border-b pb-2"><?php echo $report_title; ?></h2>
         
         <?php if (empty($userReports)): ?>
             <div class="text-center py-8 text-gray-500">
-                <?php echo $user_type === 'student' ? 'You have not submitted any reports yet.' : 'No pending reports found across all labs.'; ?>
+                <?php echo $is_staff ? 'No pending reports found for your assigned labs.' : 'You have not submitted any reports yet.'; ?>
             </div>
         <?php else: ?>
             <div class="space-y-4">
@@ -163,9 +169,8 @@ $stmt->close();
                     ?>
                     <div class="p-4 border rounded-xl shadow-sm <?php echo $status_color_bg; ?> <?php echo $status_color_border; ?>">
                         
-                        <!-- Top Row: Category and Status Badge -->
+                        <!-- Top Row: PC Info and Status Badge -->
                         <div class="flex justify-between items-start mb-2">
-                            <!-- MODIFIED: Removed / description from the h3 tag -->
                             <h3 class="font-bold text-lg text-gray-900">
                                 <?php echo htmlspecialchars($report['lab_name']) . ' - PC ' . htmlspecialchars($report['pc_number']); ?>
                             </h3>
@@ -179,12 +184,12 @@ $stmt->close();
                             <?php echo htmlspecialchars($report['description']); ?>
                         </p>
                         
-                        <!-- Footer Row: Reporter and Date (Matching Screenshot) -->
+                        <!-- Footer Row: Reporter and Date -->
                         <div class="text-xs text-gray-500 border-t border-gray-300 pt-3 mt-3 flex justify-between flex-wrap">
-                            <?php if ($user_type !== 'student'): ?>
+                            <?php if ($is_staff): ?>
                                 <span>Reported By: **<?php echo htmlspecialchars($report['reporter_name']); ?>**</span>
                             <?php else: ?>
-                                <span>Status: <?php echo $status; ?></span>
+                                <span>You reported this.</span>
                             <?php endif; ?>
                             <span>Date: <?php echo date('M d, Y H:i A', strtotime($report['created_at'])); ?></span>
                         </div>
