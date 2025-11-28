@@ -1,32 +1,33 @@
 <?php
 // update_report_status.php
-// This endpoint handles AJAX requests: updating status OR adding an internal note.
-// CRITICAL FIX: Ensures only clean JSON is returned to prevent AJAX errors.
+// ACTION: Processes status updates and internal notes using traditional POST and redirects.
+// JSON/AJAX RESPONSE HAS BEEN REMOVED TO PREVENT CORRUPTION ERRORS.
 
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
 
-// Set content type to JSON immediately
-header('Content-Type: application/json');
+include 'db_connect.php'; 
+
+// Function to handle redirection and exit
+function redirect_and_exit($message, $type = 'success') {
+    $_SESSION['status_message'] = $message;
+    $_SESSION['status_type'] = $type;
+    header("Location: homepage.php?page=labs_view");
+    exit;
+}
 
 // --- 1. Security Check ---
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_type = $_SESSION['user_type'] ?? '';
 if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || ($user_type !== 'teacher' && $user_type !== 'technician')) {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'message' => 'Permission denied.']);
-    exit;
+    redirect_and_exit('Permission denied.', 'error');
 }
 
-// --- 2. Input Validation (Moved include here, after header and security check) ---
+// --- 2. Input Validation ---
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(400);
-    echo json_encode(['success' => false, 'message' => 'Invalid request method.']);
-    exit;
+    redirect_and_exit('Invalid request method.', 'error');
 }
-
-include 'db_connect.php'; 
 
 $new_status = $_POST['new_status'] ?? '';
 $note_description = trim($_POST['note_description'] ?? '');
@@ -34,20 +35,18 @@ $is_internal_note = isset($_POST['is_internal_note']);
 
 $valid_statuses = ['Reported', 'Reworking', 'Resolved', 'OK'];
 
-// Check status if it was sent in the request (it might not be for internal note)
+// Check status if it was sent in the request
 if (!empty($new_status) && !in_array($new_status, $valid_statuses)) {
-    http_response_code(400);
-    echo json_encode(['success' => false, 'message' => 'Invalid status value.']);
-    exit;
+    redirect_and_exit('Invalid status value.', 'error');
 }
 
 $conn->begin_transaction();
-$response_data = ['success' => false, 'message' => 'Update failed unexpectedly.'];
+$message = 'Update failed unexpectedly.';
+$type = 'error';
 
 try {
     
     // --- SCENARIO A: Status Update (Processing an existing report) ---
-    // Triggered when a staff member updates an actively Reported/Reworking PC status via modal.
     if (isset($_POST['report_id'])) {
         $report_id = (int)$_POST['report_id'];
         
@@ -78,7 +77,7 @@ try {
         $stmt_update_report->execute();
         $stmt_update_report->close();
         
-        // 4. Insert a note if provided (as a separate report entry for history)
+        // 4. Insert a note if provided (for history)
         if (!empty($note_description)) {
             $note_category = "Maintenance Note";
             $note_status = $new_status; 
@@ -97,11 +96,11 @@ try {
         $stmt_update_computer->execute();
         $stmt_update_computer->close();
 
-        $response_data = ['success' => true, 'new_status' => $new_status];
+        $message = "Status updated to " . htmlspecialchars($new_status) . " successfully!";
+        $type = 'success';
 
 
     // --- SCENARIO B: Internal Note Submission (Adding note to an OK PC) ---
-    // Triggered when a staff member adds a note to a working PC to log maintenance/inspection.
     } elseif ($is_internal_note && isset($_POST['computer_id'])) {
         $computer_id = (int)$_POST['computer_id'];
         
@@ -118,7 +117,7 @@ try {
         }
         $auth_stmt->close();
 
-        // 2. Insert the internal note as a Resolved report (so it doesn't show up in pending reports)
+        // 2. Insert the internal note as a Resolved report
         $note_category = "Internal Note";
         $note_status = "Resolved";
         
@@ -127,7 +126,8 @@ try {
         $stmt_insert_note->execute();
         $stmt_insert_note->close();
 
-        $response_data = ['success' => true, 'new_status' => 'OK (Note Saved)'];
+        $message = "Internal maintenance note saved successfully!";
+        $type = 'success';
         
     } else {
          throw new Exception("Invalid parameters for update or note submission.");
@@ -139,13 +139,11 @@ try {
 } catch (Exception $e) {
     // Rollback changes on error
     $conn->rollback();
-    http_response_code(500);
-    $response_data = ['success' => false, 'message' => $e->getMessage()];
+    $message = "Database Error: " . $e->getMessage();
+    $type = 'error';
     
 }
 
-// Final output of JSON and termination of script
-echo json_encode($response_data);
 $conn->close();
-exit;
+redirect_and_exit($message, $type);
 ?>

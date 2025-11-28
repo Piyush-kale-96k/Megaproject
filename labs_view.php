@@ -9,7 +9,8 @@ if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
     exit;
 }
 
-include 'db_connect.php';
+// FIX: Use include_once to ensure the database connection is initialized only once.
+include_once 'db_connect.php';
 
 $labs_data = [];
 $user_id = $_SESSION['user_id'];
@@ -17,7 +18,15 @@ $user_type = $_SESSION['user_type'] ?? 'student';
 $is_teacher = ($user_type === 'teacher');
 $is_staff = $is_teacher || ($user_type === 'technician');
 
+// Check for and display status messages from the redirect
+$status_message = $_SESSION['status_message'] ?? '';
+$status_type = $_SESSION['status_type'] ?? '';
+unset($_SESSION['status_message']); 
+unset($_SESSION['status_type']); 
+
+
 // Fetch all labs, their computers, manager info, and the latest unresolved report
+// SQL uses compatible subquery to avoid MySQL 8.0 dependency (ROW_NUMBER()).
 $sql = "SELECT 
             l.id AS lab_id, 
             l.name AS lab_name, 
@@ -34,14 +43,13 @@ $sql = "SELECT
         FROM labs l 
         LEFT JOIN computers c ON l.id = c.lab_id 
         LEFT JOIN users m ON l.manager_id = m.id -- Manager's info
-        LEFT JOIN (
-            -- Subquery for the single latest unresolved report
-            SELECT 
-                id, computer_id, description, user_id, created_at, status,
-                ROW_NUMBER() OVER(PARTITION BY computer_id ORDER BY created_at DESC) as rn
-            FROM reports
-            WHERE status != 'Resolved'
-        ) r ON c.id = r.computer_id AND r.rn = 1
+        LEFT JOIN reports r ON c.id = r.computer_id AND r.id = (
+            -- Subquery to find the ID of the single latest unresolved report for this computer
+            SELECT MAX(r2.id)
+            FROM reports r2
+            WHERE r2.computer_id = c.id
+            AND r2.status != 'Resolved'
+        )
         LEFT JOIN users u ON r.user_id = u.id -- Reporter's info
         ORDER BY l.name, c.pc_number ASC";
 
@@ -80,6 +88,13 @@ if ($result) {
         <h1 class="text-3xl font-bold text-gray-900">Lab Status Overview</h1>
         <p class="text-gray-600 mt-1">Click on any PC to view its details.</p>
     </header>
+
+    <!-- Global Status Message -->
+    <?php if ($status_message): ?>
+        <div class="mb-6 p-4 rounded-lg <?php echo ($status_type === 'success') ? 'bg-green-100 text-green-800 border-green-300' : 'bg-red-100 text-red-800 border-red-300'; ?>">
+            <?php echo htmlspecialchars($status_message); ?>
+        </div>
+    <?php endif; ?>
 
     <?php if (empty($labs_data)): ?>
         <div class="bg-white p-8 rounded-lg shadow-sm text-center text-gray-500">
@@ -126,6 +141,7 @@ if ($result) {
                                     // Pass manager status to JS for modal button logic
                                     $can_update_status = $user_manages_lab ? '1' : '0';
                                 ?>
+                                <!-- Use data attributes to pass info to the modal -->
                                 <div class="text-center p-3 rounded-lg border <?php echo $status_color; ?> cursor-pointer hover:shadow-md transition-shadow pc-box"
                                      data-lab-name="<?php echo htmlspecialchars($lab['name']); ?>"
                                      data-pc-number="<?php echo htmlspecialchars($computer['pc_number']); ?>"
@@ -209,11 +225,11 @@ if ($result) {
                         </div>
                     `;
                     
-                    // NEW: Add description box for staff to add notes even if status is OK
+                    // NEW: Form for staff to add notes (sends to update_report_status.php via POST)
                     if (isUserStaff) {
                         manageFormHtml = `
                             <div class="mt-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
-                                <form id="add-note-form" class="space-y-3">
+                                <form id="add-note-form" action="update_report_status.php" method="POST" class="space-y-3">
                                     <input type="hidden" name="computer_id" value="${computerId}">
                                     <input type="hidden" name="new_status" value="OK">
                                     <input type="hidden" name="is_internal_note" value="1">
@@ -222,7 +238,6 @@ if ($result) {
                                     <button type="submit" class="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-slate-700 hover:bg-slate-800">
                                         Save Note
                                     </button>
-                                    <div id="add-note-message" class="text-sm pt-1 hidden"></div>
                                 </form>
                             </div>
                         `;
@@ -244,7 +259,7 @@ if ($result) {
                     if (canUserUpdateStatus) {
                         manageFormHtml = `
                             <div class="mt-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
-                                <form id="update-report-form" class="space-y-3">
+                                <form id="update-report-form" action="update_report_status.php" method="POST" class="space-y-3">
                                     <input type="hidden" name="report_id" value="${reportId}">
                                     <label class="block text-sm font-medium text-gray-700">Update Report Status</label>
                                     <select name="new_status" class="block w-full border-gray-300 rounded-md shadow-sm text-sm p-2 focus:ring-blue-500">
@@ -259,7 +274,6 @@ if ($result) {
                                     <button type="submit" class="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
                                         Update Status
                                     </button>
-                                    <div id="update-message-${reportId}" class="text-sm pt-1 hidden"></div>
                                 </form>
                             </div>
                         `;
@@ -290,23 +304,8 @@ if ($result) {
                 // Re-attach close listener
                 document.getElementById('close-modal-btn').addEventListener('click', hideModal);
 
-                // --- Attach AJAX handler for status update (if form is present) ---
-                if (isReported && canUserUpdateStatus) {
-                    const form = document.getElementById('update-report-form');
-                    const messageDiv = document.getElementById(`update-message-${reportId}`);
-                    
-                    form.addEventListener('submit', (e) => handleReportUpdate(e, form, messageDiv));
-                }
+                // NO AJAX HANDLERS NEEDED. The forms submit directly to update_report_status.php
                 
-                // --- Attach AJAX handler for adding internal notes (if form is present and status is OK) ---
-                if (!isReported && isUserStaff) {
-                    const form = document.getElementById('add-note-form');
-                    const messageDiv = document.getElementById('add-note-message');
-                    
-                    form.addEventListener('submit', (e) => handleNoteSubmission(e, form, messageDiv));
-                }
-
-
                 showModal();
             });
         });
@@ -317,89 +316,5 @@ if ($result) {
                 hideModal();
             }
         });
-        
-        // Global handler for status update (used for reported PCs)
-        async function handleReportUpdate(e, form, messageDiv) {
-             e.preventDefault();
-            messageDiv.textContent = 'Updating...';
-            messageDiv.classList.remove('hidden', 'text-red-600', 'text-green-600');
-            
-            const formData = new FormData(form);
-            
-            try {
-                // FIXED: Use ./ to force relative path lookup from current directory
-                const response = await fetch('./update_report_status.php', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                // Check if response is actually JSON
-                const text = await response.text();
-                try {
-                    const result = JSON.parse(text);
-                    if (result.success) {
-                        messageDiv.textContent = `Status updated to ${result.new_status}. Reloading page...`;
-                        messageDiv.classList.add('text-green-600', 'block');
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 500);
-                    } else {
-                        messageDiv.textContent = `Error: ${result.message}`;
-                        messageDiv.classList.add('text-red-600', 'block');
-                    }
-                } catch (e) {
-                    console.error("Server Error:", text);
-                    messageDiv.textContent = `Server Error: Invalid response format. Check console.`;
-                    messageDiv.classList.add('text-red-600', 'block');
-                }
-                
-            } catch (error) {
-                console.error("Network Error:", error);
-                messageDiv.textContent = 'Network error. Could not connect to server.';
-                messageDiv.classList.add('text-red-600', 'block');
-            }
-        }
-        
-        // Global handler for internal note submission (used for OK PCs)
-        async function handleNoteSubmission(e, form, messageDiv) {
-             e.preventDefault();
-            messageDiv.textContent = 'Saving note...';
-            messageDiv.classList.remove('hidden', 'text-red-600', 'text-green-600');
-
-            const formData = new FormData(form);
-
-            // Re-route internal note submissions to the same endpoint
-            try {
-                // FIXED: Use ./ to force relative path lookup from current directory
-                const response = await fetch('./update_report_status.php', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const text = await response.text();
-                try {
-                    const result = JSON.parse(text);
-                    if (result.success) {
-                        messageDiv.textContent = `Note saved successfully! Reloading page...`;
-                        messageDiv.classList.add('text-green-600', 'block');
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 500);
-                    } else {
-                        messageDiv.textContent = `Error: ${result.message}`;
-                        messageDiv.classList.add('text-red-600', 'block');
-                    }
-                } catch (e) {
-                    console.error("Server Error:", text);
-                    messageDiv.textContent = `Server Error: Invalid response format. Check console.`;
-                    messageDiv.classList.add('text-red-600', 'block');
-                }
-                
-            } catch (error) {
-                console.error("Network Error:", error);
-                messageDiv.textContent = 'Network error. Could not connect to server.';
-                messageDiv.classList.add('text-red-600', 'block');
-            }
-        }
     });
 </script>
