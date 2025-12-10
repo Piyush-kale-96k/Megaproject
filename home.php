@@ -3,7 +3,8 @@
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
-include 'db_connect.php';
+// FIX: Use include_once for stability
+include_once 'db_connect.php';
 
 // Ensure user is logged in before proceeding
 if (!isset($_SESSION['user_id'])) {
@@ -13,18 +14,32 @@ if (!isset($_SESSION['user_id'])) {
 
 $user_id = $_SESSION['user_id'];
 $user_type = $_SESSION['user_type'] ?? 'student';
+// CRITICAL: Get user branch
+$user_branch = $_SESSION['branch'] ?? 'Unknown'; 
 $is_staff = ($user_type === 'teacher' || $user_type === 'technician');
 
 
 // --- FETCH LIVE DATA FROM DATABASE ---
 
-// 1. Calculate PC Status Counts (Global Count)
+// 1. Calculate PC Status Counts (Filtered by Branch)
 $okPcsCount = 0;
 $reworkingPcsCount = 0;
 $reportedPcsCount = 0;
 
-$status_query = "SELECT status, COUNT(*) as count FROM computers GROUP BY status";
-$status_result = mysqli_query($conn, $status_query);
+// CRITICAL FIX: Filter status query by lab branch
+$status_query = "SELECT 
+                    c.status, 
+                    COUNT(c.id) as count 
+                 FROM computers c
+                 JOIN labs l ON c.lab_id = l.id
+                 WHERE l.branch = ?
+                 GROUP BY c.status";
+
+$stmt_status = $conn->prepare($status_query);
+$stmt_status->bind_param("s", $user_branch);
+$stmt_status->execute();
+$status_result = $stmt_status->get_result();
+
 if ($status_result) {
     while ($row = mysqli_fetch_assoc($status_result)) {
         if ($row['status'] === 'OK') {
@@ -36,15 +51,20 @@ if ($status_result) {
         }
     }
 }
+$stmt_status->close();
 
-// 2. Fetch reports based on user type and assignment
+// Calculate total PCs in the branch for context
+$total_pcs_branch = $okPcsCount + $reworkingPcsCount + $reportedPcsCount;
+
+
+// 2. Fetch reports based on user type and assignment (Filtered by Branch)
 $userReports = [];
 $reports_query_params = [];
 $reports_query_types = "";
 
 if ($user_type === 'student') {
-    // Students only see their own reports
-    $report_title = "My Submitted Reports";
+    // Students only see their own reports (filtered by user_id)
+    $report_title = "My Submitted Reports (Across " . htmlspecialchars($user_branch) . " Branch)";
     $reports_query = "
         SELECT 
             r.category,
@@ -57,15 +77,17 @@ if ($user_type === 'student') {
         FROM reports r
         JOIN computers c ON r.computer_id = c.id
         JOIN labs l ON c.lab_id = l.id
-        WHERE r.user_id = ?
+        WHERE r.user_id = ? AND l.branch = ?
         ORDER BY r.created_at DESC";
-    $reports_query_params[] = $user_id;
-    $reports_query_types = "i";
+    $reports_query_params = [$user_id, $user_branch];
+    $reports_query_types = "is";
 
 } else {
-    // Teachers/Technicians see pending reports ONLY from their assigned labs
-    $report_title = "Pending Reports for My Assigned Labs";
-    // CRITICAL: Filter by l.manager_id = ? 
+    // Teachers/Technicians see pending reports ONLY from labs assigned to their branch
+    $report_title = "Pending Reports for Labs in Your Branch (" . htmlspecialchars($user_branch) . ")";
+    
+    // Staff should see ALL pending reports in their branch, regardless of manager_id,
+    // as management duties can overlap, but ownership must be strictly branch-based.
     $reports_query = "
         SELECT 
             r.category,
@@ -79,16 +101,18 @@ if ($user_type === 'student') {
         JOIN computers c ON r.computer_id = c.id
         JOIN labs l ON c.lab_id = l.id
         JOIN users u ON r.user_id = u.id
-        WHERE l.manager_id = ? AND r.status != 'Resolved'
+        WHERE l.branch = ? AND r.status != 'Resolved'
         ORDER BY FIELD(r.status, 'Reported', 'Reworking'), r.created_at DESC";
-    $reports_query_params[] = $user_id;
-    $reports_query_types = "i";
+    $reports_query_params[] = $user_branch;
+    $reports_query_types = "s";
 }
 
 // Execute the final report query
 $stmt = $conn->prepare($reports_query);
 
 if (!empty($reports_query_params)) {
+    // Note: We use call_user_func_array for binding when parameters are dynamic, 
+    // but since PHP 5.6+ and with the fixed types/count, we can use $stmt->bind_param(...$reports_query_params);
     $stmt->bind_param($reports_query_types, ...$reports_query_params);
 }
 
@@ -101,6 +125,11 @@ $stmt->close();
 ?>
 
 <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+    
+    <header class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Dashboard Overview</h1>
+        <p class="text-gray-600 mt-1">Status of all **<?php echo htmlspecialchars($user_branch); ?>** Branch PCs (Total: <?php echo $total_pcs_branch; ?>)</p>
+    </header>
     
     <!-- Status Summary Boxes -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
@@ -142,7 +171,7 @@ $stmt->close();
         
         <?php if (empty($userReports)): ?>
             <div class="text-center py-8 text-gray-500">
-                <?php echo $is_staff ? 'No pending reports found for your assigned labs.' : 'You have not submitted any reports yet.'; ?>
+                <?php echo $is_staff ? 'No pending reports found for your assigned branch labs.' : 'You have not submitted any reports yet.'; ?>
             </div>
         <?php else: ?>
             <div class="space-y-4">
