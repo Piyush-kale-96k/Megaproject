@@ -1,10 +1,13 @@
 <?php
 // pc_history.php (Content Fragment)
-// Displays a history of all reports for a single computer.
+// Displays a history of all reports for a single computer, showing both the original report 
+// and the maintenance notes in labeled sections.
+
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
-include 'db_connect.php';
+// FIX: Use include_once for stability
+include_once 'db_connect.php';
 
 // Security check: only allow staff (Teacher/Technician) to view history
 $user_type = $_SESSION['user_type'] ?? 'student';
@@ -83,6 +86,8 @@ $reports_stmt->close();
                 <?php foreach ($reports as $report): ?>
                     <?php
                         $status_color = 'bg-gray-100 text-gray-800 border-gray-300';
+                        $is_internal = $report['category'] === 'Internal Maintenance Log';
+                        
                         if ($report['status'] === 'Resolved') {
                             $status_color = 'bg-green-50 text-green-800 border-green-300';
                         } elseif ($report['status'] === 'Reported') {
@@ -91,19 +96,17 @@ $reports_stmt->close();
                             $status_color = 'bg-yellow-50 text-yellow-800 border-yellow-300';
                         }
                         
-                        // Decide which description to display prominently
-                        $display_description = !empty($report['resolution_note']) ? 
-                                               '**Resolution Note:** ' . $report['resolution_note'] : 
-                                               $report['description'];
-
-                        $is_internal = $report['category'] === 'Internal Maintenance Log';
-                        
                         if ($is_internal) {
+                            // Internal logs use a blue background
                             $report_title = 'Internal Log: ' . htmlspecialchars($report['category']);
                             $status_color = 'bg-blue-50 text-blue-800 border-blue-300';
                         } else {
                             $report_title = htmlspecialchars($report['category']) . ' Issue';
                         }
+                        
+                        // Condition to show original report description (must not be empty, and not the internal marker)
+                        $show_original_description = !empty(trim($report['description'])) && ($report['description'] !== '[INTERNAL NOTE: Maintenance Logged]');
+                        $show_resolution_note = !empty(trim($report['resolution_note']));
                     ?>
                     <div class="p-4 border rounded-lg shadow-sm <?php echo $status_color; ?>">
                         <div class="flex justify-between items-start mb-2">
@@ -117,7 +120,23 @@ $reports_stmt->close();
                                 <?php echo htmlspecialchars($report['status']); ?>
                             </span>
                         </div>
-                        <p class="text-sm text-gray-700 mb-2"><?php echo nl2br(htmlspecialchars($display_description)); ?></p>
+
+                        <!-- Display Original Fault Description (Issue reported by student/user) -->
+                        <?php if ($show_original_description): ?>
+                            <div class="mb-2 p-3 bg-white rounded-md border border-gray-100 shadow-inner">
+                                <strong class="text-sm block text-gray-800 mb-1">Fault Reported:</strong>
+                                <p class="text-sm text-gray-700"><?php echo nl2br(htmlspecialchars($report['description'])); ?></p>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <!-- Display Technician Resolution Note (Action taken/Findings) -->
+                        <?php if ($show_resolution_note): ?>
+                             <div class="mb-2 p-3 bg-white rounded-md border border-gray-100 shadow-inner">
+                                <strong class="text-sm block text-gray-800 mb-1">Technician Note:</strong>
+                                <p class="text-sm text-gray-700"><?php echo nl2br(htmlspecialchars($report['resolution_note'])); ?></p>
+                            </div>
+                        <?php endif; ?>
+
                         <div class="text-xs text-gray-500 border-t border-<?php echo $is_internal ? 'blue' : ($report['status'] === 'Resolved' ? 'green' : ($report['status'] === 'Reported' ? 'red' : 'yellow')); ?>-200 pt-2 mt-2 flex justify-between">
                             <span>Logged By: **<?php echo htmlspecialchars($report['reporter_name']); ?>**</span>
                             <span>Date: <?php echo date('M d, Y H:i A', strtotime($report['created_at'])); ?></span>

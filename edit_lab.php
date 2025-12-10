@@ -6,6 +6,7 @@ if (session_status() == PHP_SESSION_NONE) {
 
 // Security Check: Only Teacher can manage lab structure
 $user_type = $_SESSION["user_type"] ?? '';
+$user_branch = $_SESSION["branch"] ?? ''; // NEW: Get user branch
 if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || $user_type !== 'teacher') {
     echo "<script>window.location.href='homepage.php?page=home';</script>";
     exit;
@@ -22,13 +23,17 @@ if ($lab_id === 0) {
     return;
 }
 
-// --- Fetch all staff (Teachers and Technicians) for the dropdown ---
+// --- Fetch all staff (Teachers and Technicians) for the dropdown (FILTERED BY BRANCH) ---
 $staff_members = [];
-$staff_query = "SELECT id, name, user_type FROM users WHERE user_type IN ('teacher', 'technician') ORDER BY name ASC";
-$staff_result = mysqli_query($conn, $staff_query);
+$staff_query = "SELECT id, name, user_type FROM users WHERE user_type IN ('teacher', 'technician') AND branch = ? ORDER BY name ASC";
+$stmt_staff = $conn->prepare($staff_query);
+$stmt_staff->bind_param("s", $user_branch);
+$stmt_staff->execute();
+$staff_result = $stmt_staff->get_result();
 if ($staff_result) {
     $staff_members = mysqli_fetch_all($staff_result, MYSQLI_ASSOC);
 }
+$stmt_staff->close();
 
 
 // --- Handle Update ---
@@ -37,16 +42,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_lab'])) {
     $new_total_pcs = (int)$_POST['total_pcs'];
     $current_total = (int)$_POST['current_total'];
     $manager_id = filter_var($_POST['manager_id'], FILTER_VALIDATE_INT);
+    $lab_branch_check = trim($_POST['lab_branch_check']); // Hidden field to confirm branch ownership
 
-    if (empty($new_name) || $new_total_pcs <= 0 || $manager_id === false) {
+    // Security Check 2: Ensure the user is only updating a lab in their branch (via hidden field)
+    if ($lab_branch_check !== $user_branch) {
+         $message = "Security Error: You are only authorized to edit labs in the " . htmlspecialchars($user_branch) . " Branch.";
+         $messageType = "error";
+    } elseif (empty($new_name) || $new_total_pcs <= 0 || $manager_id === false) {
         $message = "Invalid input. Name and Manager must be set, and PC count must be positive.";
         $messageType = "error";
     } else {
         $conn->begin_transaction();
         try {
             // 1. Update Name and Manager ID
-            $stmt = $conn->prepare("UPDATE labs SET name = ?, manager_id = ? WHERE id = ?");
-            $stmt->bind_param("sii", $new_name, $manager_id, $lab_id);
+            $stmt = $conn->prepare("UPDATE labs SET name = ?, manager_id = ? WHERE id = ? AND branch = ?"); // CRITICAL: Filter by branch here too
+            $stmt->bind_param("siis", $new_name, $manager_id, $lab_id, $user_branch);
             $stmt->execute();
             $stmt->close();
 
@@ -61,6 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_lab'])) {
                 $stmt_add->close();
             } elseif ($new_total_pcs < $current_total) {
                 // REMOVE PCs (Delete PCs where pc_number > new_total)
+                // This delete is safe because we already checked branch ownership via the hidden field.
                 $stmt_del = $conn->prepare("DELETE FROM computers WHERE lab_id = ? AND pc_number > ?");
                 $stmt_del->bind_param("ii", $lab_id, $new_total_pcs);
                 $stmt_del->execute();
@@ -75,23 +86,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_lab'])) {
             if (strpos($e->getMessage(), 'foreign key constraint') !== false) {
                 $message = "Cannot decrease PC count because some PCs have active reports attached. Resolve or delete the reports first.";
             } else {
-                $message = "Database Error: Could not process update.";
+                $message = "Database Error: Could not process update. Error: " . $e->getMessage();
             }
             $messageType = "error";
         }
     }
 }
 
-// Fetch Current Lab Data
-$stmt = $conn->prepare("SELECT l.name, l.manager_id, COUNT(c.id) as pc_count FROM labs l LEFT JOIN computers c ON l.id = c.lab_id WHERE l.id = ? GROUP BY l.id, l.manager_id, l.name");
-$stmt->bind_param("i", $lab_id);
+// Fetch Current Lab Data (CRITICAL: Filter by Branch to prevent cross-branch editing)
+$stmt = $conn->prepare("SELECT l.name, l.manager_id, l.branch, COUNT(c.id) as pc_count FROM labs l LEFT JOIN computers c ON l.id = c.lab_id WHERE l.id = ? AND l.branch = ? GROUP BY l.id, l.manager_id, l.name, l.branch");
+$stmt->bind_param("is", $lab_id, $user_branch);
 $stmt->execute();
 $result = $stmt->get_result();
 $lab = $result->fetch_assoc();
 $stmt->close();
 
+// FINAL SECURITY CHECK: If the lab is not found OR it doesn't belong to the user's branch
 if (!$lab) {
-    echo "<div class='p-4 text-red-600 bg-red-100 rounded-lg'>Lab not found.</div>";
+    echo "<div class='p-4 text-red-600 bg-red-100 rounded-lg'>Lab not found or unauthorized access attempt.</div>";
     return;
 }
 ?>
@@ -111,13 +123,22 @@ if (!$lab) {
 
         <form action="?page=edit_lab&id=<?php echo $lab_id; ?>" method="POST" class="space-y-6">
             <input type="hidden" name="current_total" value="<?php echo $lab['pc_count']; ?>">
+            <input type="hidden" name="lab_branch_check" value="<?php echo htmlspecialchars($lab['branch']); ?>"> <!-- Security confirmation -->
             
             <div>
                 <label class="block text-sm font-medium text-gray-700">Lab Name</label>
                 <input type="text" name="lab_name" value="<?php echo htmlspecialchars($lab['name']); ?>" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm p-2 border" required>
             </div>
             
-            <!-- Manager Dropdown -->
+            <!-- Display Lab Branch (Read-Only) -->
+            <div>
+                 <label class="block text-sm font-medium text-gray-700">Branch</label>
+                 <div class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-gray-50 rounded-md shadow-sm text-gray-800 font-semibold">
+                    <?php echo htmlspecialchars($lab['branch']); ?>
+                 </div>
+            </div>
+
+            <!-- Manager Dropdown (Filtered by Branch) -->
             <div>
                 <label for="manager_id" class="block text-sm font-medium text-gray-700">Assign Manager / Branch Lead</label>
                 <select id="manager_id" name="manager_id" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500" required>

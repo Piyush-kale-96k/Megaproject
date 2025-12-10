@@ -6,22 +6,13 @@ if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
 
-// FIX: Add a check to ensure the user_id is set in the session.
-// This prevents the "Undefined array key" warning and ensures the user is properly authenticated.
+// Check to ensure the user_id and branch are set in the session.
 if (!isset($_SESSION['user_id'])) {
-    // Display an error message and stop the script if the user ID is missing.
     die("Authentication error: User ID not found in session. Please log out and log in again.");
 }
 
-// --- Database Connection ---
-$servername = "localhost";
-$username = "root";
-$password = "";
-$dbname = "login_db";
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-  die("Connection failed: " . $conn->connect_error);
-}
+// FIX: Rely on single connection from db_connect.php
+include_once 'db_connect.php'; 
 
 // Initialize a message variable for feedback
 $update_message = "";
@@ -31,16 +22,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $newName = htmlspecialchars($_POST["name"]);
     $newRole = htmlspecialchars($_POST["role"]);
     $newEmail = htmlspecialchars($_POST["email"]);
+    // NEW: Capture Branch update from the form
+    $newBranch = htmlspecialchars($_POST["branch"]); 
     $user_id = $_SESSION['user_id'];
     
-    $update_stmt = $conn->prepare("UPDATE users SET name = ?, user_type = ?, email = ? WHERE id = ?");
+    // FIX: Update query to include the branch column
+    $update_stmt = $conn->prepare("UPDATE users SET name = ?, user_type = ?, email = ?, branch = ? WHERE id = ?");
     $db_role = strtolower($newRole);
-    $update_stmt->bind_param("sssi", $newName, $db_role, $newEmail, $user_id);
+    // Bind parameters now include the branch (sssi to ssssi)
+    $update_stmt->bind_param("ssssi", $newName, $db_role, $newEmail, $newBranch, $user_id); 
 
     if ($update_stmt->execute()) {
         $update_message = "Profile updated successfully!";
-        // Also update the session name in case it's displayed elsewhere
+        // Also update the session variables
         $_SESSION['name'] = $newName;
+        $_SESSION['branch'] = $newBranch; // Update session branch
     } else {
         $update_message = "Error updating record: " . $conn->error;
     }
@@ -49,7 +45,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
 // --- Data Fetching ---
 $user_id = $_SESSION['user_id'];
-$stmt = $conn->prepare("SELECT name, email, user_type, created_at FROM users WHERE id = ?");
+// FIX: Fetch the 'branch' column
+$stmt = $conn->prepare("SELECT name, email, user_type, branch, created_at FROM users WHERE id = ?");
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
 $result = $stmt->get_result();
@@ -59,19 +56,27 @@ if ($result->num_rows > 0) {
     $name = $user['name'];
     $email = $user['email'];
     $role = ucfirst($user['user_type']);
+    $branch = htmlspecialchars($user['branch']); // Fetch branch data
     // Format the registration date
     $member_since = date("F Y", strtotime($user['created_at']));
 } else {
-    // If user is not found, it's safer to log them out.
     session_destroy();
-    // Since we can't redirect here, we'll just show an error.
     die("User not found. Please log in again.");
 }
 $stmt->close();
-$conn->close();
 
 // Get the first initial for the profile picture
 $initial = !empty($name) ? strtoupper(substr($name, 0, 1)) : '?';
+
+// Define the branches for the forms (matching index.php for dropdown consistency)
+$branches = [
+    'CO' => 'Computer Eng.', 
+    'AI' => 'AI / Data Science', 
+    'ENTC' => 'Electronics Eng.', 
+    'ELE' => 'Electrical Eng.', 
+    'Mech' => 'Mechanical Eng.', 
+    'CE' => 'Civil Eng.'
+];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -105,7 +110,13 @@ $initial = !empty($name) ? strtoupper(substr($name, 0, 1)) : '?';
                 <div class="flex justify-between items-start">
                      <div>
                         <h2 id="displayName" class="text-2xl font-bold text-gray-800"><?php echo htmlspecialchars($name); ?></h2>
-                        <p id="displayRole" class="text-gray-500 mt-1"><?php echo htmlspecialchars($role); ?></p>
+                        <!-- Display Role and Branch -->
+                        <p id="displayRole" class="text-gray-500 mt-1">
+                            <?php echo htmlspecialchars($role); ?> 
+                            <?php if (!empty($branch)): ?>
+                                <span class="text-sm font-semibold text-blue-600 ml-1">(<?php echo htmlspecialchars($branch); ?> Branch)</span>
+                            <?php endif; ?>
+                        </p>
                         <p id="displayEmail" class="text-gray-500 mt-1"><?php echo htmlspecialchars($email); ?></p>
                     </div>
                     <button id="editProfileBtn" class="inline-flex justify-center py-2 px-6 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-slate-700 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 transition-colors">
@@ -141,6 +152,20 @@ $initial = !empty($name) ? strtoupper(substr($name, 0, 1)) : '?';
                             <option <?php if ($role == 'Technician') echo 'selected'; ?>>Technician</option>
                         </select>
                     </div>
+                    
+                    <!-- NEW: Branch Input -->
+                    <div>
+                        <label for="branchInput" class="block text-sm font-medium text-gray-700">Branch</label>
+                        <select id="branchInput" name="branch" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 pl-3 pr-10 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" required>
+                            <option value="" disabled>Select Branch</option>
+                            <?php foreach ($branches as $key => $label): ?>
+                                <option value="<?php echo $key; ?>" <?php if ($key == $user['branch']) echo 'selected'; ?>>
+                                    <?php echo htmlspecialchars($label); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
                     <div>
                         <label for="emailInput" class="block text-sm font-medium text-gray-700">Email</label>
                         <input type="email" id="emailInput" name="email" value="<?php echo htmlspecialchars($email); ?>" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">

@@ -9,12 +9,13 @@ if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true) {
     exit;
 }
 
-// FIX: Use include_once to ensure the database connection is initialized only once.
+// FIX: Use include_once for stability
 include_once 'db_connect.php';
 
 $labs_data = [];
 $user_id = $_SESSION['user_id'];
 $user_type = $_SESSION['user_type'] ?? 'student';
+$user_branch = $_SESSION['branch'] ?? 'Unknown'; // NEW: Get user branch
 $is_teacher = ($user_type === 'teacher');
 $is_staff = $is_teacher || ($user_type === 'technician');
 
@@ -26,7 +27,7 @@ unset($_SESSION['status_type']);
 
 
 // Fetch all labs, their computers, manager info, and the latest unresolved report
-// SQL uses compatible subquery to avoid MySQL 8.0 dependency (ROW_NUMBER()).
+// CRITICAL FIX: Add WHERE l.branch = ? to filter data by the logged-in user's branch.
 $sql = "SELECT 
             l.id AS lab_id, 
             l.name AS lab_name, 
@@ -51,9 +52,13 @@ $sql = "SELECT
             AND r2.status != 'Resolved'
         )
         LEFT JOIN users u ON r.user_id = u.id -- Reporter's info
+        WHERE l.branch = ?
         ORDER BY l.name, c.pc_number ASC";
 
-$result = mysqli_query($conn, $sql);
+$stmt = $conn->prepare($sql);
+$stmt->bind_param("s", $user_branch); // NEW: Bind the user's branch
+$stmt->execute();
+$result = $stmt->get_result();
 
 if ($result) {
     while ($row = mysqli_fetch_assoc($result)) {
@@ -86,7 +91,7 @@ if ($result) {
 <div class="container mx-auto p-4 sm:p-6 lg:p-8">
     <header class="mb-8">
         <h1 class="text-3xl font-bold text-gray-900">Lab Status Overview</h1>
-        <p class="text-gray-600 mt-1">Click on any PC to view its details.</p>
+        <p class="text-gray-600 mt-1">Showing only labs assigned to the **<?php echo htmlspecialchars($user_branch); ?>** Branch.</p>
     </header>
 
     <!-- Global Status Message -->
@@ -98,7 +103,7 @@ if ($result) {
 
     <?php if (empty($labs_data)): ?>
         <div class="bg-white p-8 rounded-lg shadow-sm text-center text-gray-500">
-            <p>No labs have been set up yet. A teacher can add labs from the "Manage Labs" page.</p>
+            <p>No labs have been set up yet or assigned to the **<?php echo htmlspecialchars($user_branch); ?>** Branch.</p>
         </div>
     <?php else: ?>
         <div class="space-y-8">
@@ -225,8 +230,9 @@ if ($result) {
                         </div>
                     `;
                     
-                    // NEW: Form for staff to add notes (sends to update_report_status.php via POST)
+                    // Form for staff to add notes (sends to update_report_status.php via POST)
                     if (isUserStaff) {
+                        // CRITICAL FIX: Ensure computer_id is always passed
                         manageFormHtml = `
                             <div class="mt-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
                                 <form id="add-note-form" action="update_report_status.php" method="POST" class="space-y-3">
@@ -257,10 +263,12 @@ if ($result) {
                     
                     // --- Build Staff Management Form if reported and user can update ---
                     if (canUserUpdateStatus) {
+                        // CRITICAL FIX: Ensure report_id and computer_id are both passed in the form
                         manageFormHtml = `
                             <div class="mt-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
                                 <form id="update-report-form" action="update_report_status.php" method="POST" class="space-y-3">
                                     <input type="hidden" name="report_id" value="${reportId}">
+                                    <input type="hidden" name="computer_id" value="${computerId}"> 
                                     <label class="block text-sm font-medium text-gray-700">Update Report Status</label>
                                     <select name="new_status" class="block w-full border-gray-300 rounded-md shadow-sm text-sm p-2 focus:ring-blue-500">
                                         <option value="Reported" ${reportCurrentStatus === 'Reported' ? 'selected' : ''}>Reported (Needs Review)</option>
@@ -292,7 +300,7 @@ if ($result) {
                 // --- Build Modal Actions (History and Close Button) ---
                 let actionsHtml = '';
 
-                // History Link (Visible to Staff)
+                // History Link (Visible to Staff) - FIX: Use template literal to inject computerId
                 if (isUserStaff) {
                     actionsHtml += `<a href="?page=pc_history&computer_id=${computerId}" class="px-4 py-2 bg-slate-600 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-500 block mb-2">View Report History</a>`;
                 }
@@ -303,8 +311,6 @@ if ($result) {
 
                 // Re-attach close listener
                 document.getElementById('close-modal-btn').addEventListener('click', hideModal);
-
-                // NO AJAX HANDLERS NEEDED. The forms submit directly to update_report_status.php
                 
                 showModal();
             });

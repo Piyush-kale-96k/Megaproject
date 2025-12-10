@@ -39,8 +39,20 @@ session_start();
                     <option value="" disabled selected>Select User Type</option>
                     <option value="student">Student</option>
                     <option value="teacher">Teacher</option>
-                    <option value="technician">Technician</option> <!-- ADDED TECHNICIAN -->
+                    <option value="technician">Technician</option>
                 </select>
+                
+                <!-- UPDATED: Strict Branch Selection List -->
+                <select name="branch" required>
+                    <option value="" disabled selected>Select Branch</option>
+                    <option value="CO">Computer Eng.</option>
+                    <option value="AI">AI / Data Science</option>
+                    <option value="ENTC">Electronics Eng.</option>
+                    <option value="ELE">Electrical Eng.</option>
+                    <option value="Mech">Mechanical Eng.</option>
+                    <option value="CE">Civil Eng.</option>
+                </select>
+
                 <input type="text" name="name" placeholder="Name" required />
                 <input type="email" name="email" placeholder="Email" required />
                 <input type="password" name="password" placeholder="Password" required />
@@ -67,7 +79,7 @@ session_start();
                     <option value="" disabled selected>Select User Type</option>
                     <option value="student">Student</option>
                     <option value="teacher">Teacher</option>
-                    <option value="technician">Technician</option> <!-- ADDED TECHNICIAN -->
+                    <option value="technician">Technician</option>
                 </select>
                 <input type="email" name="email" placeholder="Email" required />
                 <input type="password" name="password" placeholder="Password" required />

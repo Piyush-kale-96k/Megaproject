@@ -14,7 +14,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $userType = $_POST['userType'];
 
     // Prepare a statement to prevent SQL injection
-    $stmt = $conn->prepare("SELECT id, name, password, user_type FROM users WHERE email = ? AND user_type = ?");
+    // NEW: Selecting the 'branch' column
+    $stmt = $conn->prepare("SELECT id, name, password, user_type, branch FROM users WHERE email = ? AND user_type = ?");
     $stmt->bind_param("ss", $email, $userType);
     $stmt->execute();
     $result = $stmt->get_result();
@@ -31,9 +32,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
             // Store data in session variables
             $_SESSION["loggedin"] = true;
-            $_SESSION["user_id"] = $user['id']; // This is the critical line that was missing
+            $_SESSION["user_id"] = $user['id']; 
             $_SESSION["name"] = $user['name'];
             $_SESSION["user_type"] = $user['user_type'];
+            // NEW: Store Branch
+            $_SESSION["branch"] = $user['branch']; 
 
             // Redirect user to the main homepage
             header("location: homepage.php");
@@ -53,5 +56,3 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 }
 
 $conn->close();
-?>
-

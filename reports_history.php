@@ -5,10 +5,12 @@
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
-include 'db_connect.php';
+// FIX: Use include_once for stability
+include_once 'db_connect.php';
 
 // Security check: only allow staff (Teacher/Technician)
 $user_type = $_SESSION['user_type'] ?? 'student';
+$user_branch = $_SESSION['branch'] ?? ''; // CRITICAL: Get user branch from session
 if (!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || ($user_type === 'student')) {
     echo "<div class='p-4 text-red-600 bg-red-100 rounded-lg'>Permission denied. Only staff can view full report history.</div>";
     return;
@@ -44,10 +46,12 @@ switch ($filter_period) {
 }
 
 // Query to get all reports within the specified time frame
+// CRITICAL FIX: Added l.branch = ? to filter reports by the user's branch
 $sql = "SELECT 
             r.id AS report_id,
             r.status AS report_status,
             r.description,
+            r.resolution_note,
             r.category,
             r.created_at,
             c.pc_number,
@@ -57,11 +61,12 @@ $sql = "SELECT
         JOIN users u ON r.user_id = u.id
         JOIN computers c ON r.computer_id = c.id
         JOIN labs l ON c.lab_id = l.id
-        WHERE r.created_at >= ?
+        WHERE r.created_at >= ? AND l.branch = ?
         ORDER BY r.created_at DESC";
 
 $stmt = $conn->prepare($sql);
-$stmt->bind_param("s", $start_date);
+// NEW: Bind both the date and the branch
+$stmt->bind_param("ss", $start_date, $user_branch);
 $stmt->execute();
 $result = $stmt->get_result();
 if ($result) {
@@ -75,7 +80,7 @@ $stmt->close();
         
         <header class="mb-8 border-b pb-4">
             <h1 class="text-3xl font-extrabold text-gray-900">Historical Reports <?php echo $title_suffix; ?></h1>
-            <p class="text-gray-600 mt-1">Review all logged faults and their resolution status by date.</p>
+            <p class="text-gray-600 mt-1">Review all logged faults and their resolution status by date for **<?php echo htmlspecialchars($user_branch); ?>** Branch labs.</p>
         </header>
         
         <!-- Filter Form -->
@@ -106,7 +111,7 @@ $stmt->close();
                     <tr>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Submitted</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PC / Lab</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Issue Type / Description</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Issue Context</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reporter</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                     </tr>
@@ -120,6 +125,10 @@ $stmt->close();
                         </tr>
                     <?php else: ?>
                         <?php foreach ($reports as $report): ?>
+                            <?php 
+                                $show_original_description = !empty(trim($report['description'])) && ($report['description'] !== '[INTERNAL NOTE: Maintenance Logged]');
+                                $show_resolution_note = !empty(trim($report['resolution_note']));
+                            ?>
                             <tr class="hover:bg-gray-50 transition duration-150">
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                                     <?php echo date('M d, Y', strtotime($report['created_at'])); ?> <br>
@@ -128,9 +137,20 @@ $stmt->close();
                                 <td class="px-6 py-4">
                                     <div class="text-sm font-bold text-gray-900"><?php echo htmlspecialchars($report['lab_name']) . ' - PC ' . htmlspecialchars($report['pc_number']); ?></div>
                                 </td>
-                                <td class="px-6 py-4 max-w-xs">
-                                    <div class="text-xs font-medium text-gray-700"><?php echo htmlspecialchars($report['category']); ?></div>
-                                    <div class="text-xs text-gray-500 mt-1 truncate" title="<?php echo htmlspecialchars($report['description']); ?>"><?php echo htmlspecialchars($report['description']); ?></div>
+                                <td class="px-6 py-4 max-w-sm">
+                                    <div class="text-xs font-medium text-gray-700 mb-1"><?php echo htmlspecialchars($report['category']); ?></div>
+                                    
+                                    <?php if ($show_original_description): ?>
+                                        <div class="text-xs text-gray-600 truncate" title="<?php echo htmlspecialchars($report['description']); ?>">
+                                            <strong class="text-gray-900">Issue:</strong> <?php echo htmlspecialchars($report['description']); ?>
+                                        </div>
+                                    <?php endif; ?>
+
+                                    <?php if ($show_resolution_note): ?>
+                                        <div class="text-xs text-gray-500 mt-1 truncate" title="<?php echo htmlspecialchars($report['resolution_note']); ?>">
+                                            <strong class="text-gray-900">Note:</strong> <?php echo htmlspecialchars($report['resolution_note']); ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"><?php echo htmlspecialchars($report['user_name']); ?></td>
                                 <td class="px-6 py-4">
