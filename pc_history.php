@@ -44,7 +44,7 @@ if (!$pc_details) {
 // Fetch all reports for this computer, ordered by newest first
 $reports = [];
 $reports_query = "
-    SELECT r.description, r.category, r.status, r.created_at, u.name AS reporter_name
+    SELECT r.description, r.resolution_note, r.category, r.status, r.created_at, u.name AS reporter_name
     FROM reports r
     JOIN users u ON r.user_id = u.id
     WHERE r.computer_id = ?
@@ -90,10 +90,24 @@ $reports_stmt->close();
                         } elseif ($report['status'] === 'Reworking') {
                             $status_color = 'bg-yellow-50 text-yellow-800 border-yellow-300';
                         }
+                        
+                        // Decide which description to display prominently
+                        $display_description = !empty($report['resolution_note']) ? 
+                                               '**Resolution Note:** ' . $report['resolution_note'] : 
+                                               $report['description'];
+
+                        $is_internal = $report['category'] === 'Internal Maintenance Log';
+                        
+                        if ($is_internal) {
+                            $report_title = 'Internal Log: ' . htmlspecialchars($report['category']);
+                            $status_color = 'bg-blue-50 text-blue-800 border-blue-300';
+                        } else {
+                            $report_title = htmlspecialchars($report['category']) . ' Issue';
+                        }
                     ?>
                     <div class="p-4 border rounded-lg shadow-sm <?php echo $status_color; ?>">
                         <div class="flex justify-between items-start mb-2">
-                            <span class="font-semibold text-lg text-gray-900"><?php echo htmlspecialchars($report['category']); ?> Issue</span>
+                            <span class="font-semibold text-lg text-gray-900"><?php echo $report_title; ?></span>
                             <span class="text-xs font-medium px-2 py-0.5 rounded-full 
                                 <?php 
                                     if ($report['status'] === 'Resolved') echo 'bg-green-200 text-green-900';
@@ -103,9 +117,9 @@ $reports_stmt->close();
                                 <?php echo htmlspecialchars($report['status']); ?>
                             </span>
                         </div>
-                        <p class="text-sm text-gray-700 mb-2"><?php echo nl2br(htmlspecialchars($report['description'])); ?></p>
-                        <div class="text-xs text-gray-500 border-t border-<?php echo $report['status'] === 'Resolved' ? 'green' : ($report['status'] === 'Reported' ? 'red' : 'yellow'); ?>-200 pt-2 mt-2 flex justify-between">
-                            <span>Reported By: **<?php echo htmlspecialchars($report['reporter_name']); ?>**</span>
+                        <p class="text-sm text-gray-700 mb-2"><?php echo nl2br(htmlspecialchars($display_description)); ?></p>
+                        <div class="text-xs text-gray-500 border-t border-<?php echo $is_internal ? 'blue' : ($report['status'] === 'Resolved' ? 'green' : ($report['status'] === 'Reported' ? 'red' : 'yellow')); ?>-200 pt-2 mt-2 flex justify-between">
+                            <span>Logged By: **<?php echo htmlspecialchars($report['reporter_name']); ?>**</span>
                             <span>Date: <?php echo date('M d, Y H:i A', strtotime($report['created_at'])); ?></span>
                         </div>
                     </div>
